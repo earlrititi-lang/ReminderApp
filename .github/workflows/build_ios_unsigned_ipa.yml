@@ -61,4 +61,7 @@ jobs:
 
       - name: Fail workflow if iOS build failed
         if: steps.build_ios.outcome != 'success'
-        run: exit 1
+        run: |
+          echo "Last 200 lines of build_ios.log:"
+          tail -n 200 build_ios.log
+          exit 1
