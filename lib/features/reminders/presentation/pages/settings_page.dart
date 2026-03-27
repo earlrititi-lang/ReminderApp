@@ -10,7 +10,9 @@ class SettingsPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final settings = ref.watch(appSettingsProvider);
+    final firebaseAvailable = ref.watch(firebaseAvailableProvider);
     final settingsNotifier = ref.read(appSettingsProvider.notifier);
+    final effectiveCloudEnabled = firebaseAvailable && settings.firebaseEnabled;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -85,7 +87,7 @@ class SettingsPage extends ConsumerWidget {
                     if (!_validateSyncChange(
                       context,
                       value,
-                      settings.firebaseEnabled,
+                      effectiveCloudEnabled,
                     )) {
                       return;
                     }
@@ -97,10 +99,13 @@ class SettingsPage extends ConsumerWidget {
               _buildSettingTile(
                 icon: Icons.cloud_sync,
                 title: 'Firebase (nube)',
-                subtitle: 'Sincronizar con la nube',
+                subtitle: firebaseAvailable
+                    ? 'Sincronizar con la nube'
+                    : 'No configurado en esta plataforma',
                 trailing: Switch(
-                  value: settings.firebaseEnabled,
-                  onChanged: (value) async {
+                  value: effectiveCloudEnabled,
+                  onChanged: firebaseAvailable
+                      ? (value) async {
                     if (!_validateSyncChange(
                       context,
                       value,
@@ -109,7 +114,8 @@ class SettingsPage extends ConsumerWidget {
                       return;
                     }
                     await settingsNotifier.setFirebaseEnabled(value);
-                  },
+                  }
+                      : null,
                   activeThumbColor: AppColors.accent,
                 ),
               ),

@@ -10,6 +10,7 @@ import 'package:uuid/uuid.dart';
 import '../../../../core/error/failures.dart';
 import '../../../../core/settings/app_settings_provider.dart';
 import '../../../../core/usecases/usecase.dart';
+import '../../../../core/utils/firebase_support.dart';
 import '../../../../core/utils/notification_helper.dart';
 import '../../data/datasources/reminder_local_datasource.dart';
 import '../../data/datasources/reminder_remote_datasource.dart';
@@ -25,11 +26,21 @@ final isarProvider = Provider<Isar>((ref) {
   throw UnimplementedError('Isar debe ser inicializado en main.dart');
 });
 
-final firebaseAuthProvider = Provider<FirebaseAuth>((ref) {
+final firebaseAvailableProvider = Provider<bool>((ref) {
+  return isFirebaseAvailable();
+});
+
+final firebaseAuthProvider = Provider<FirebaseAuth?>((ref) {
+  if (!ref.watch(firebaseAvailableProvider)) {
+    return null;
+  }
   return FirebaseAuth.instance;
 });
 
-final firestoreProvider = Provider<FirebaseFirestore>((ref) {
+final firestoreProvider = Provider<FirebaseFirestore?>((ref) {
+  if (!ref.watch(firebaseAvailableProvider)) {
+    return null;
+  }
   return FirebaseFirestore.instance;
 });
 
@@ -43,11 +54,15 @@ final localDataSourceProvider = Provider<ReminderLocalDataSource>((ref) {
 });
 
 final remoteDataSourceProvider = Provider<ReminderRemoteDataSource>((ref) {
+  if (!ref.watch(firebaseAvailableProvider)) {
+    return const UnavailableReminderRemoteDataSource();
+  }
+
   final firestore = ref.watch(firestoreProvider);
   final auth = ref.watch(firebaseAuthProvider);
   return ReminderRemoteDataSourceImpl(
-    firestore: firestore,
-    auth: auth,
+    firestore: firestore!,
+    auth: auth!,
   );
 });
 
@@ -63,7 +78,7 @@ final reminderRepositoryProvider = Provider<ReminderRepository>((ref) {
     localDataSource: localDataSource,
     remoteDataSource: remoteDataSource,
     isLocalEnabled: syncSettings.$1,
-    isCloudEnabled: syncSettings.$2,
+    isCloudEnabled: syncSettings.$2 && ref.watch(firebaseAvailableProvider),
   );
 });
 

@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/date_symbol_data_local.dart';
+import 'core/utils/firebase_support.dart';
 import 'core/utils/notification_helper.dart';
 import 'core/theme/app_colors.dart';
 import 'features/reminders/data/models/reminder_model.dart';
@@ -71,8 +72,10 @@ class _AppBootstrapState extends State<AppBootstrap> {
 
   Future<void> _bootstrap() async {
     try {
-      await _initializeFirebase();
-      await _signInAnonymouslySafe();
+      final firebaseReady = await _initializeFirebase();
+      if (firebaseReady) {
+        await _signInAnonymouslySafe();
+      }
       await _initializeNotifications();
       await initializeDateFormatting('es_ES');
 
@@ -101,17 +104,26 @@ class _AppBootstrapState extends State<AppBootstrap> {
     }
   }
 
-  Future<void> _initializeFirebase() async {
+  Future<bool> _initializeFirebase() async {
+    if (!isFirebaseConfiguredForCurrentPlatform()) {
+      if (kDebugMode) {
+        debugPrint('Firebase no configurado para esta plataforma.');
+      }
+      return false;
+    }
+
     try {
       if (Firebase.apps.isEmpty) {
         await Firebase.initializeApp(
           options: DefaultFirebaseOptions.currentPlatform,
         );
       }
+      return true;
     } catch (e) {
       if (kDebugMode) {
-        debugPrint('Firebase ya inicializado o no disponible: $e');
+        debugPrint('Firebase no disponible: $e');
       }
+      return Firebase.apps.isNotEmpty;
     }
   }
 
@@ -121,6 +133,10 @@ class _AppBootstrapState extends State<AppBootstrap> {
   }
 
   Future<void> _signInAnonymouslySafe() async {
+    if (Firebase.apps.isEmpty) {
+      return;
+    }
+
     final auth = FirebaseAuth.instance;
     if (auth.currentUser != null) return;
     try {

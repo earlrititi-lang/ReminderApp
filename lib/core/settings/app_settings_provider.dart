@@ -1,6 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../utils/firebase_support.dart';
+
 class AppSettings {
   final bool vibrationEnabled;
   final bool isarEnabled;
@@ -40,18 +42,30 @@ class AppSettingsNotifier extends StateNotifier<AppSettings> {
   late final Future<SharedPreferences> _prefsFuture =
       SharedPreferences.getInstance();
 
-  AppSettingsNotifier() : super(const AppSettings()) {
+  AppSettingsNotifier()
+      : super(
+          AppSettings(
+            firebaseEnabled: isFirebaseConfiguredForCurrentPlatform(),
+          ),
+        ) {
     _load();
   }
 
   Future<void> _load() async {
     final prefs = await _prefsFuture;
+    final firebaseAvailable = isFirebaseConfiguredForCurrentPlatform();
     state = state.copyWith(
       vibrationEnabled: prefs.getBool(_keyVibration) ?? state.vibrationEnabled,
       isarEnabled: prefs.getBool(_keyIsar) ?? state.isarEnabled,
-      firebaseEnabled: prefs.getBool(_keyFirebase) ?? state.firebaseEnabled,
+      firebaseEnabled: firebaseAvailable
+          ? (prefs.getBool(_keyFirebase) ?? state.firebaseEnabled)
+          : false,
       useAlarmSound: prefs.getBool(_keyUseAlarmSound) ?? state.useAlarmSound,
     );
+
+    if (!firebaseAvailable) {
+      await _persistBool(_keyFirebase, false);
+    }
   }
 
   Future<void> _persistBool(String key, bool value) async {
@@ -70,6 +84,12 @@ class AppSettingsNotifier extends StateNotifier<AppSettings> {
   }
 
   Future<void> setFirebaseEnabled(bool value) async {
+    if (!isFirebaseConfiguredForCurrentPlatform()) {
+      state = state.copyWith(firebaseEnabled: false);
+      await _persistBool(_keyFirebase, false);
+      return;
+    }
+
     state = state.copyWith(firebaseEnabled: value);
     await _persistBool(_keyFirebase, value);
   }

@@ -14,6 +14,36 @@ abstract class ReminderRemoteDataSource {
 }
 
 /// Implementación con Firebase
+class UnavailableReminderRemoteDataSource implements ReminderRemoteDataSource {
+  const UnavailableReminderRemoteDataSource([
+    this.message = 'Firebase no está disponible en esta plataforma.',
+  ]);
+
+  final String message;
+
+  Never _throw() => throw ServerException(message);
+
+  @override
+  Future<ReminderModel> createReminder(ReminderModel reminder) async => _throw();
+
+  @override
+  Future<void> deleteReminder(String id) async => _throw();
+
+  @override
+  Future<ReminderModel> getReminderById(String id) async => _throw();
+
+  @override
+  Future<List<ReminderModel>> getReminders() async => _throw();
+
+  @override
+  Future<ReminderModel> updateReminder(ReminderModel reminder) async => _throw();
+
+  @override
+  Stream<List<ReminderModel>> watchReminders() {
+    return Stream.error(ServerException(message));
+  }
+}
+
 class ReminderRemoteDataSourceImpl implements ReminderRemoteDataSource {
   final FirebaseFirestore firestore;
   final FirebaseAuth auth;
