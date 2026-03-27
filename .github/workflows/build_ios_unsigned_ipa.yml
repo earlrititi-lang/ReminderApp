@@ -62,6 +62,11 @@ jobs:
       - name: Fail workflow if iOS build failed
         if: steps.build_ios.outcome != 'success'
         run: |
+          BUILD_TAIL="$(tail -n 80 build_ios.log)"
+          BUILD_TAIL="${BUILD_TAIL//'%'/'%25'}"
+          BUILD_TAIL="${BUILD_TAIL//$'\n'/'%0A'}"
+          BUILD_TAIL="${BUILD_TAIL//$'\r'/'%0D'}"
+          echo "::error title=iOS build log tail::$BUILD_TAIL"
           echo "## iOS build failure" >> "$GITHUB_STEP_SUMMARY"
           echo '```text' >> "$GITHUB_STEP_SUMMARY"
           tail -n 200 build_ios.log >> "$GITHUB_STEP_SUMMARY"
