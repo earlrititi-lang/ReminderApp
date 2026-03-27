@@ -62,6 +62,10 @@ jobs:
       - name: Fail workflow if iOS build failed
         if: steps.build_ios.outcome != 'success'
         run: |
+          echo "## iOS build failure" >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          tail -n 200 build_ios.log >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
           echo "Last 200 lines of build_ios.log:"
           tail -n 200 build_ios.log
           exit 1
