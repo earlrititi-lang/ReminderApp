@@ -27,9 +27,14 @@ jobs:
         run: flutter create . --platforms=ios
 
       - name: Build iOS app without code signing
-        run: flutter build ios --release --no-codesign
+        id: build_ios
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          flutter build ios --release --no-codesign -v 2>&1 | tee build_ios.log
 
       - name: Package unsigned IPA for AltStore
+        if: steps.build_ios.outcome == 'success'
         run: |
           rm -rf Payload
           mkdir -p Payload
@@ -38,9 +43,22 @@ jobs:
           zip -r build/ios/ipa/reminder_app-unsigned.ipa Payload
           rm -rf Payload
 
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-log
+          path: build_ios.log
+          if-no-files-found: error
+
       - name: Upload IPA artifact
+        if: steps.build_ios.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: ios-unsigned-ipa
           path: build/ios/ipa/reminder_app-unsigned.ipa
           if-no-files-found: error
+
+      - name: Fail workflow if iOS build failed
+        if: steps.build_ios.outcome != 'success'
+        run: exit 1
