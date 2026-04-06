@@ -19,11 +19,93 @@ class ReminderLocalDataSourceImpl implements ReminderLocalDataSource {
 
   ReminderLocalDataSourceImpl({required this.isar});
 
+  DateTime _lastModifiedAt(ReminderModel reminder) {
+    return reminder.updatedAt ?? reminder.createdAt;
+  }
+
+  bool _shouldReplaceReminder(
+    ReminderModel existing,
+    ReminderModel candidate,
+  ) {
+    final existingStamp = _lastModifiedAt(existing);
+    final candidateStamp = _lastModifiedAt(candidate);
+
+    if (candidateStamp.isAfter(existingStamp)) {
+      return true;
+    }
+
+    if (candidateStamp.isBefore(existingStamp)) {
+      return false;
+    }
+
+    return candidate.isarId >= existing.isarId;
+  }
+
+  List<ReminderModel> _dedupeReminders(Iterable<ReminderModel> reminders) {
+    final remindersById = <String, ReminderModel>{};
+
+    for (final reminder in reminders) {
+      final existing = remindersById[reminder.id];
+      if (existing == null || _shouldReplaceReminder(existing, reminder)) {
+        remindersById[reminder.id] = reminder;
+      }
+    }
+
+    return remindersById.values.toList();
+  }
+
+  Future<List<ReminderModel>> _normalizeStoredReminders(
+    List<ReminderModel> reminders,
+  ) async {
+    final uniqueReminders = _dedupeReminders(reminders);
+    if (uniqueReminders.length == reminders.length) {
+      return uniqueReminders;
+    }
+
+    await isar.writeTxn(() async {
+      await isar.reminderModels.clear();
+      await isar.reminderModels.putAll(uniqueReminders);
+    });
+
+    return uniqueReminders;
+  }
+
+  Future<ReminderModel> _putReminderByExternalId(ReminderModel reminder) async {
+    await isar.writeTxn(() async {
+      final existingReminders = await isar.reminderModels
+          .filter()
+          .idEqualTo(reminder.id)
+          .findAll();
+
+      if (existingReminders.isNotEmpty) {
+        final canonicalReminder = _dedupeReminders(existingReminders).single;
+        reminder.isarId = canonicalReminder.isarId;
+      }
+
+      await isar.reminderModels.put(reminder);
+
+      final duplicates = await isar.reminderModels
+          .filter()
+          .idEqualTo(reminder.id)
+          .findAll();
+      final duplicateIds = duplicates
+          .where((item) => item.isarId != reminder.isarId)
+          .map((item) => item.isarId)
+          .toList();
+
+      if (duplicateIds.isNotEmpty) {
+        await isar.reminderModels.deleteAll(duplicateIds);
+      }
+    });
+
+    return reminder;
+  }
+
   @override
   Future<List<ReminderModel>> getReminders() async {
     try {
       final reminders = await isar.reminderModels.where().findAll();
-      return reminders;
+      return _normalizeStoredReminders(reminders);
     } catch (e) {
       throw CacheException('Error al obtener recordatorios: $e');
     }
@@ -32,16 +114,20 @@ class ReminderLocalDataSourceImpl implements ReminderLocalDataSource {
   @override
   Future<ReminderModel> getReminderById(String id) async {
     try {
-      final reminder = await isar.reminderModels
+      final reminders = await isar.reminderModels
           .filter()
           .idEqualTo(id)
-          .findFirst();
+          .findAll();
       
-      if (reminder == null) {
+      if (reminders.isEmpty) {
         throw CacheException('Recordatorio no encontrado');
       }
-      
-      return reminder;
+
+      if (reminders.length > 1) {
+        await _normalizeStoredReminders(await isar.reminderModels.where().findAll());
+      }
+
+      return _dedupeReminders(reminders).single;
     } on CacheException {
       rethrow;
     } catch (e) {
@@ -52,10 +138,7 @@ class ReminderLocalDataSourceImpl implements ReminderLocalDataSource {
   @override
   Future<ReminderModel> createReminder(ReminderModel reminder) async {
     try {
-      await isar.writeTxn(() async {
-        await isar.reminderModels.put(reminder);
-      });
-      return reminder;
+      return await _putReminderByExternalId(reminder);
     } on CacheException {
       rethrow;
     } catch (e) {
@@ -66,10 +149,7 @@ class ReminderLocalDataSourceImpl implements ReminderLocalDataSource {
   @override
   Future<ReminderModel> updateReminder(ReminderModel reminder) async {
     try {
-      await isar.writeTxn(() async {
-        await isar.reminderModels.put(reminder);
-      });
-      return reminder;
+      return await _putReminderByExternalId(reminder);
     } on CacheException {
       rethrow;
     } catch (e) {
@@ -101,9 +181,10 @@ class ReminderLocalDataSourceImpl implements ReminderLocalDataSource {
   @override
   Future<void> cacheReminders(List<ReminderModel> reminders) async {
     try {
+      final uniqueReminders = _dedupeReminders(reminders);
       await isar.writeTxn(() async {
         await isar.reminderModels.clear();
-        await isar.reminderModels.putAll(reminders);
+        await isar.reminderModels.putAll(uniqueReminders);
       });
     } on CacheException {
       rethrow;
@@ -117,7 +198,8 @@ class ReminderLocalDataSourceImpl implements ReminderLocalDataSource {
     try {
       return isar.reminderModels
           .where()
-          .watch(fireImmediately: true);
+          .watch(fireImmediately: true)
+          .asyncMap(_normalizeStoredReminders);
     } catch (e) {
       throw CacheException('Error al observar recordatorios: $e');
     }

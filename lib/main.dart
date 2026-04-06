@@ -89,6 +89,7 @@ class _AppBootstrapState extends State<AppBootstrap> {
           isarProvider.overrideWithValue(isar),
         ],
       );
+      await _restorePendingNotifications(container);
       _configureNotificationHandling(container);
 
       if (!mounted) return;
@@ -130,6 +131,21 @@ class _AppBootstrapState extends State<AppBootstrap> {
   Future<void> _initializeNotifications() async {
     final notificationHelper = NotificationHelper();
     await notificationHelper.initialize();
+  }
+
+  Future<void> _restorePendingNotifications(ProviderContainer container) async {
+    try {
+      final localDataSource = container.read(localDataSourceProvider);
+      final notificationHelper = container.read(notificationHelperProvider);
+      final reminders = (await localDataSource.getReminders())
+          .map((model) => model.toEntity())
+          .toList();
+      await notificationHelper.syncReminderNotifications(reminders);
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('No se pudieron reprogramar recordatorios locales: $e');
+      }
+    }
   }
 
   Future<void> _signInAnonymouslySafe() async {

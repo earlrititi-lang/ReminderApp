@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:speech_to_text/speech_recognition_error.dart';
 import 'package:speech_to_text/speech_recognition_result.dart';
 import 'package:speech_to_text/speech_to_text.dart';
+import 'dart:async';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/settings/app_settings_provider.dart';
 import '../providers/reminder_provider.dart';
@@ -20,14 +21,22 @@ class HomePage extends ConsumerStatefulWidget {
 }
 
 class _HomePageState extends ConsumerState<HomePage> {
+  static const _voiceListenFor = Duration(seconds: 55);
+  static const _voicePauseFor = Duration(seconds: 12);
+  static const _voiceRestartDelay = Duration(milliseconds: 250);
+
   final SpeechToText _speechToText = SpeechToText();
   ProviderSubscription<RemindersState>? _remindersSubscription;
   bool _speechReady = false;
   bool _isListening = false;
   bool _isCreatingVoiceReminder = false;
+  bool _voiceSessionActive = false;
+  bool _voiceReviewPending = false;
+  bool _voiceStopRequested = false;
   bool _speechHadError = false;
   String _lastRecognizedWords = '';
   String? _speechLocaleId;
+  Timer? _voiceRestartTimer;
 
   @override
   void initState() {
@@ -52,8 +61,28 @@ class _HomePageState extends ConsumerState<HomePage> {
   @override
   void dispose() {
     _remindersSubscription?.close();
+    _voiceRestartTimer?.cancel();
     _speechToText.cancel();
     super.dispose();
+  }
+
+  void _cancelVoiceRestart() {
+    _voiceRestartTimer?.cancel();
+    _voiceRestartTimer = null;
+  }
+
+  void _scheduleVoiceRestart() {
+    _cancelVoiceRestart();
+    _voiceRestartTimer = Timer(_voiceRestartDelay, () {
+      if (!mounted ||
+          !_voiceSessionActive ||
+          _voiceStopRequested ||
+          _isListening ||
+          _isCreatingVoiceReminder) {
+        return;
+      }
+      unawaited(_startVoiceListening());
+    });
   }
 
   Future<int> _createReminders({
@@ -76,7 +105,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                 notificationEnabled: notificationEnabled,
                 vibrationEnabled: settings.vibrationEnabled,
                 soundPath: notificationEnabled && settings.useAlarmSound
-                    ? 'alarm'
+                    ? 'prominent'
                     : null,
               );
       if (created) {
@@ -149,6 +178,7 @@ class _HomePageState extends ConsumerState<HomePage> {
       setState(() {
         _speechReady = false;
         _isListening = false;
+        _voiceSessionActive = false;
       });
       return false;
     }
@@ -157,8 +187,14 @@ class _HomePageState extends ConsumerState<HomePage> {
   Future<void> _toggleVoiceReminder() async {
     if (_isCreatingVoiceReminder) return;
 
-    if (_isListening) {
-      await _speechToText.stop();
+    if (_voiceSessionActive) {
+      _voiceStopRequested = true;
+      _cancelVoiceRestart();
+      if (_isListening) {
+        await _speechToText.stop();
+      } else {
+        await _finishVoiceSession();
+      }
       return;
     }
 
@@ -174,23 +210,35 @@ class _HomePageState extends ConsumerState<HomePage> {
 
     _lastRecognizedWords = '';
     _speechHadError = false;
+    _voiceStopRequested = false;
+    _cancelVoiceRestart();
     setState(() {
-      _isListening = true;
+      _voiceSessionActive = true;
+      _voiceReviewPending = false;
+      _isListening = false;
     });
 
     _showSnackBar(
-      'Di el titulo de la tarea',
+      'Habla y pulsa el micro otra vez para revisar la transcripcion',
       backgroundColor: AppColors.success,
-      duration: const Duration(seconds: 4),
+      duration: const Duration(seconds: 6),
     );
+
+    await _startVoiceListening();
+  }
+
+  Future<void> _startVoiceListening() async {
+    if (!_voiceSessionActive || _isCreatingVoiceReminder) {
+      return;
+    }
 
     await _speechToText.listen(
       onResult: _onSpeechResult,
       localeId: _speechLocaleId,
-      listenFor: const Duration(seconds: 8),
-      pauseFor: const Duration(seconds: 2),
+      listenFor: _voiceListenFor,
+      pauseFor: _voicePauseFor,
       listenOptions: SpeechListenOptions(
-        listenMode: ListenMode.confirmation,
+        listenMode: ListenMode.dictation,
         cancelOnError: true,
         partialResults: true,
         autoPunctuation: true,
@@ -199,10 +247,85 @@ class _HomePageState extends ConsumerState<HomePage> {
     );
   }
 
+  Future<void> _finishVoiceSession() async {
+    _cancelVoiceRestart();
+    _voiceStopRequested = false;
+    if (mounted) {
+      setState(() {
+        _voiceSessionActive = false;
+        _isListening = false;
+      });
+    }
+
+    final transcript = _lastRecognizedWords.trim();
+    if (transcript.isEmpty) {
+      setState(() {
+        _voiceReviewPending = false;
+      });
+      _showSnackBar(
+        'No se detecto ningun titulo',
+        backgroundColor: AppColors.danger,
+      );
+      return;
+    }
+
+    setState(() {
+      _voiceReviewPending = true;
+    });
+  }
+
+  Future<void> _confirmVoiceReminder() async {
+    if (_isCreatingVoiceReminder) {
+      return;
+    }
+
+    final transcript = _lastRecognizedWords.trim();
+    if (transcript.isEmpty) {
+      _showSnackBar(
+        'No hay transcripcion para crear la tarea',
+        backgroundColor: AppColors.danger,
+      );
+      return;
+    }
+
+    await _createReminderFromVoice(transcript);
+  }
+
+  Future<void> _cancelVoiceCapture() async {
+    _voiceStopRequested = true;
+    _cancelVoiceRestart();
+
+    try {
+      if (_speechToText.isListening) {
+        await _speechToText.cancel();
+      }
+    } catch (_) {
+      // Ignoramos errores al cancelar una sesion ya cerrada.
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _voiceSessionActive = false;
+      _voiceReviewPending = false;
+      _isListening = false;
+      _isCreatingVoiceReminder = false;
+      _speechHadError = false;
+      _lastRecognizedWords = '';
+    });
+
+    _showSnackBar(
+      'Captura por voz cancelada',
+      backgroundColor: AppColors.panelTop,
+    );
+  }
+
   Future<void> _createReminderFromVoice(String transcript) async {
     final parsed = parseVoiceReminderCommand(transcript);
     final title = _normalizeVoiceTitle(parsed.title);
     if (title.isEmpty) {
+      setState(() {
+        _voiceReviewPending = true;
+      });
       _showSnackBar(
         'No se reconocio ningun titulo valido',
         backgroundColor: AppColors.danger,
@@ -213,6 +336,8 @@ class _HomePageState extends ConsumerState<HomePage> {
     setState(() {
       _isCreatingVoiceReminder = true;
       _isListening = false;
+      _voiceSessionActive = false;
+      _voiceReviewPending = false;
     });
 
     try {
@@ -238,6 +363,8 @@ class _HomePageState extends ConsumerState<HomePage> {
       if (mounted) {
         setState(() {
           _isCreatingVoiceReminder = false;
+          _voiceReviewPending = false;
+          _lastRecognizedWords = '';
         });
       }
     }
@@ -250,12 +377,10 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   void _onSpeechResult(SpeechRecognitionResult result) {
     final recognizedWords = result.recognizedWords.trim();
-    if (recognizedWords.isNotEmpty) {
-      _lastRecognizedWords = recognizedWords;
-    }
-
-    if (result.finalResult && !_isCreatingVoiceReminder) {
-      _createReminderFromVoice(recognizedWords);
+    if (recognizedWords.isNotEmpty && recognizedWords != _lastRecognizedWords) {
+      setState(() {
+        _lastRecognizedWords = recognizedWords;
+      });
     }
   }
 
@@ -270,26 +395,50 @@ class _HomePageState extends ConsumerState<HomePage> {
     }
 
     final finished = status == 'done' || status == 'notListening';
-    if (finished &&
-        _lastRecognizedWords.trim().isEmpty &&
-        !_speechHadError &&
-        !_isCreatingVoiceReminder) {
-      _showSnackBar(
-        'No se detecto ningun titulo',
-        backgroundColor: AppColors.danger,
-      );
+    if (!finished || !_voiceSessionActive || _isCreatingVoiceReminder) {
+      return;
     }
+
+    if (_voiceStopRequested) {
+      unawaited(_finishVoiceSession());
+      return;
+    }
+
+    if (!_speechHadError) {
+      _scheduleVoiceRestart();
+      return;
+    }
+
+    setState(() {
+      _voiceSessionActive = false;
+    });
   }
 
   void _onSpeechError(SpeechRecognitionError error) {
     if (!mounted) return;
 
-    _speechHadError = true;
+    final normalizedError = error.errorMsg.toLowerCase();
+    final isPermissionError = normalizedError.contains('permission');
+    final isRecoverable = normalizedError.contains('no_match') ||
+        normalizedError.contains('no match') ||
+        normalizedError.contains('speech_timeout') ||
+        normalizedError.contains('speech timeout') ||
+        normalizedError.contains('error 6') ||
+        normalizedError.contains('error 7');
+
+    _speechHadError = !(isRecoverable && _voiceSessionActive);
     setState(() {
       _isListening = false;
+      if (_speechHadError) {
+        _voiceSessionActive = false;
+      }
     });
 
-    final message = error.errorMsg.contains('permission')
+    if (!_speechHadError && !_voiceStopRequested) {
+      return;
+    }
+
+    final message = isPermissionError
         ? 'No hay permiso para usar el microfono'
         : 'No se pudo reconocer la voz';
     _showSnackBar(
@@ -314,10 +463,136 @@ class _HomePageState extends ConsumerState<HomePage> {
     );
   }
 
+  Widget _buildVoiceTranscriptCard() {
+    final hasTranscript = _lastRecognizedWords.trim().isNotEmpty;
+    final headline = _isCreatingVoiceReminder
+        ? 'Creando tarea por voz'
+        : _voiceReviewPending
+            ? 'Revisar transcripcion'
+            : _voiceSessionActive
+                ? 'Escuchando'
+                : 'Ultima transcripcion';
+    final helperText = _isCreatingVoiceReminder
+        ? 'Procesando el texto reconocido...'
+        : _voiceReviewPending
+            ? 'Si el texto no es correcto, cancela. Si esta bien, crea la tarea.'
+            : _voiceSessionActive
+                ? 'Pulsa el boton verde otra vez para detener y revisar la transcripcion'
+                : 'Texto reconocido';
+    final transcript = hasTranscript
+        ? _lastRecognizedWords
+        : _voiceSessionActive
+            ? 'Habla ahora. Ire mostrando aqui lo que voy entendiendo.'
+            : 'Sin texto reconocido';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.panelBottom.withValues(alpha: 0.96),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: _isCreatingVoiceReminder
+              ? AppColors.accent
+              : AppColors.success.withValues(alpha: 0.55),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.24),
+            blurRadius: 16,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Icon(
+                _isCreatingVoiceReminder ? Icons.sync : Icons.mic,
+                color: _isCreatingVoiceReminder
+                    ? AppColors.accent
+                    : AppColors.success,
+                size: 18,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                headline,
+                style: const TextStyle(
+                  color: AppColors.textPrimary,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            transcript,
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: hasTranscript
+                  ? AppColors.textPrimary
+                  : AppColors.textSecondary,
+              fontSize: 15,
+              height: 1.3,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            helperText,
+            style: const TextStyle(
+              color: AppColors.textMuted,
+              fontSize: 12,
+            ),
+          ),
+          if (!_isCreatingVoiceReminder &&
+              (_voiceSessionActive || _voiceReviewPending)) ...[
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton.icon(
+                  onPressed: _cancelVoiceCapture,
+                  icon: const Icon(
+                    Icons.close,
+                    size: 18,
+                    color: AppColors.danger,
+                  ),
+                  label: const Text(
+                    'Cancelar',
+                    style: TextStyle(color: AppColors.danger),
+                  ),
+                ),
+                if (_voiceReviewPending) ...[
+                  const SizedBox(width: 8),
+                  ElevatedButton.icon(
+                    onPressed: hasTranscript ? _confirmVoiceReminder : null,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.success,
+                      foregroundColor: Colors.black,
+                    ),
+                    icon: const Icon(Icons.check, size: 18),
+                    label: const Text('Crear'),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(remindersNotifierProvider);
     final visibleReminders = state.reminders;
+    final showVoiceTranscript =
+        _voiceSessionActive || _isCreatingVoiceReminder || _voiceReviewPending;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -483,37 +758,54 @@ class _HomePageState extends ConsumerState<HomePage> {
       floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
       floatingActionButton: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            FloatingActionButton(
-              heroTag: 'voice_reminder_fab',
-              onPressed: _toggleVoiceReminder,
-              backgroundColor: AppColors.success,
-              tooltip: _isListening ? 'Detener escucha' : 'Crear por voz',
-              child: _isCreatingVoiceReminder
-                  ? const SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2.4,
-                        valueColor: AlwaysStoppedAnimation<Color>(Colors.black),
-                      ),
-                    )
-                  : Icon(
-                      _isListening ? Icons.mic : Icons.keyboard_voice,
-                      color: Colors.black,
-                      size: 30,
-                    ),
-            ),
-            FloatingActionButton(
-              heroTag: 'add_reminder_fab',
-              onPressed: _showAddReminderDialog,
-              backgroundColor: AppColors.accent,
-              tooltip: 'Crear recordatorio',
-              child: const Icon(Icons.add, color: Colors.black, size: 32),
-            ),
-          ],
+        child: SizedBox(
+          width: MediaQuery.sizeOf(context).width - 16,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (showVoiceTranscript) ...[
+                _buildVoiceTranscriptCard(),
+                const SizedBox(height: 12),
+              ],
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  FloatingActionButton(
+                    heroTag: 'voice_reminder_fab',
+                    onPressed: _toggleVoiceReminder,
+                    backgroundColor: AppColors.success,
+                    tooltip: _voiceSessionActive
+                        ? 'Detener y revisar'
+                        : 'Crear por voz',
+                    child: _isCreatingVoiceReminder
+                        ? const SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.4,
+                              valueColor:
+                                  AlwaysStoppedAnimation<Color>(Colors.black),
+                            ),
+                          )
+                        : Icon(
+                            _voiceSessionActive
+                                ? Icons.stop
+                                : Icons.keyboard_voice,
+                            color: Colors.black,
+                            size: 30,
+                          ),
+                  ),
+                  FloatingActionButton(
+                    heroTag: 'add_reminder_fab',
+                    onPressed: _showAddReminderDialog,
+                    backgroundColor: AppColors.accent,
+                    tooltip: 'Crear recordatorio',
+                    child: const Icon(Icons.add, color: Colors.black, size: 32),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );

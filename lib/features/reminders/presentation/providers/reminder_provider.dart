@@ -195,12 +195,53 @@ class RemindersNotifier extends StateNotifier<RemindersState> {
     );
   }
 
+  DateTime _lastModifiedAt(Reminder reminder) {
+    return reminder.updatedAt ?? reminder.createdAt;
+  }
+
+  List<Reminder> _dedupeReminders(Iterable<Reminder> reminders) {
+    final remindersById = <String, Reminder>{};
+
+    for (final reminder in reminders) {
+      final existing = remindersById[reminder.id];
+      if (existing == null) {
+        remindersById[reminder.id] = reminder;
+        continue;
+      }
+
+      final existingStamp = _lastModifiedAt(existing);
+      final nextStamp = _lastModifiedAt(reminder);
+      if (nextStamp.isAfter(existingStamp) ||
+          nextStamp.isAtSameMomentAs(existingStamp)) {
+        remindersById[reminder.id] = reminder;
+      }
+    }
+
+    return remindersById.values.toList();
+  }
+
   List<Reminder> _sortReminders(List<Reminder> reminders) {
-    final pending = reminders.where((r) => !r.isCompleted).toList()
+    final uniqueReminders = _dedupeReminders(reminders);
+    final pending = uniqueReminders.where((r) => !r.isCompleted).toList()
       ..sort((a, b) => a.dateTime.compareTo(b.dateTime));
-    final completed = reminders.where((r) => r.isCompleted).toList()
+    final completed = uniqueReminders.where((r) => r.isCompleted).toList()
       ..sort((a, b) => a.dateTime.compareTo(b.dateTime));
     return [...pending, ...completed];
+  }
+
+  List<Reminder> _upsertReminderInState(Reminder reminder) {
+    final existingIndex = state.reminders.indexWhere(
+      (item) => item.id == reminder.id,
+    );
+    final nextReminders = [...state.reminders];
+
+    if (existingIndex == -1) {
+      nextReminders.add(reminder);
+    } else {
+      nextReminders[existingIndex] = reminder;
+    }
+
+    return _sortReminders(nextReminders);
   }
 
   void _applyLoadedReminders(List<Reminder> reminders) {
@@ -261,9 +302,10 @@ class RemindersNotifier extends StateNotifier<RemindersState> {
     result.fold(
       (failure) => state = state.copyWith(error: failure.message),
       (createdReminder) {
-        final updatedList =
-            _sortReminders([...state.reminders, createdReminder]);
-        state = state.copyWith(reminders: updatedList, error: null);
+        state = state.copyWith(
+          reminders: _upsertReminderInState(createdReminder),
+          error: null,
+        );
       },
     );
 

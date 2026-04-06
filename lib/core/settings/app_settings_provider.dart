@@ -30,7 +30,7 @@ class AppSettings {
     );
   }
 
-  String get soundLabel => useAlarmSound ? 'Alarma' : 'Sistema';
+  String get soundLabel => useAlarmSound ? 'Destacada' : 'Estandar';
 }
 
 class AppSettingsNotifier extends StateNotifier<AppSettings> {

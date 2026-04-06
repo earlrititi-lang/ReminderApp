@@ -1,11 +1,9 @@
-import 'dart:typed_data';
-
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:timezone/data/latest_all.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
+
+import '../../features/reminders/domain/entities/reminder.dart';
 
 class ReminderNotificationResponse {
   final String? actionId;
@@ -19,114 +17,155 @@ class ReminderNotificationResponse {
 
 class NotificationHelper {
   static final NotificationHelper _instance = NotificationHelper._internal();
+
   factory NotificationHelper() => _instance;
+
   NotificationHelper._internal();
+
+  static const _androidChannelId = 'reminder_alerts';
+  static const _androidChannelName = 'Recordatorios';
+  static const _androidChannelDescription =
+      'Notificaciones de recordatorios pendientes';
+  static const _iosReminderCategoryId = 'reminder_actions_v2';
+  static const _defaultReminderBody = 'Tienes un recordatorio pendiente';
 
   final FlutterLocalNotificationsPlugin _notifications =
       FlutterLocalNotificationsPlugin();
 
-  static const MethodChannel _alarmChannel =
-      MethodChannel('com.example.reminder_app/alarm_sound');
-
   bool _initialized = false;
   void Function(ReminderNotificationResponse response)? _onTapHandler;
 
-  /// Inicializa el sistema de notificaciones
+  AndroidFlutterLocalNotificationsPlugin? _androidPlugin() {
+    try {
+      return _notifications.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  IOSFlutterLocalNotificationsPlugin? _iosPlugin() {
+    try {
+      return _notifications.resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin>();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bool get _hasPlatformImplementation =>
+      _androidPlugin() != null || _iosPlugin() != null;
+
   Future<void> initialize() async {
     if (_initialized) return;
 
-    // Inicializar zonas horarias
     tzdata.initializeTimeZones();
     tz.setLocalLocation(tz.getLocation('Europe/Madrid'));
 
-    // Configuracion para Android
     const androidSettings =
         AndroidInitializationSettings('@mipmap/ic_launcher');
-
-    const initSettings = InitializationSettings(
-      android: androidSettings,
+    final darwinSettings = DarwinInitializationSettings(
+      requestAlertPermission: false,
+      requestSoundPermission: false,
+      requestBadgePermission: false,
+      defaultPresentAlert: true,
+      defaultPresentSound: true,
+      defaultPresentBadge: true,
+      defaultPresentBanner: true,
+      defaultPresentList: true,
+      notificationCategories: <DarwinNotificationCategory>[
+        DarwinNotificationCategory(
+          _iosReminderCategoryId,
+          actions: <DarwinNotificationAction>[
+            DarwinNotificationAction.plain(
+              'mark_done',
+              'Completar',
+              options: <DarwinNotificationActionOption>{
+                DarwinNotificationActionOption.foreground,
+              },
+            ),
+            DarwinNotificationAction.plain(
+              'snooze_10',
+              '+10 min',
+              options: <DarwinNotificationActionOption>{
+                DarwinNotificationActionOption.foreground,
+              },
+            ),
+          ],
+        ),
+      ],
     );
+
+    final initSettings = InitializationSettings(
+      android: androidSettings,
+      iOS: darwinSettings,
+    );
+
+    if (!_hasPlatformImplementation) {
+      _initialized = true;
+      return;
+    }
 
     await _notifications.initialize(
       initSettings,
       onDidReceiveNotificationResponse: _onNotificationTap,
     );
 
-    // Solicitar permisos
     await _requestPermissions();
-
-    // Crear canal de notificacion base
     await _createNotificationChannel();
 
     _initialized = true;
   }
 
-  /// Crea el canal de notificacion con maxima prioridad
   Future<void> _createNotificationChannel() async {
-    await _ensureAndroidChannel(
-      useCustomSound: true,
-      vibrationEnabled: true,
-    );
-    debugPrint('Canal de notificacion creado');
-  }
-
-  Future<String> _ensureAndroidChannel({
-    required bool useCustomSound,
-    required bool vibrationEnabled,
-  }) async {
-    final soundTag = useCustomSound ? 'alarm' : 'system';
-    final vibTag = vibrationEnabled ? 'vib' : 'novib';
-    final channelId = 'critical_alarms_${soundTag}_$vibTag';
-    final channelName =
-        useCustomSound ? 'Alarmas (alarma)' : 'Alarmas (sistema)';
-    final channelDescription = vibrationEnabled
-        ? 'Notificaciones de alarma con vibracion'
-        : 'Notificaciones de alarma sin vibracion';
-
-    final androidChannel = AndroidNotificationChannel(
-      channelId,
-      channelName,
-      description: channelDescription,
-      importance: Importance.max,
-      playSound: true,
-      enableVibration: vibrationEnabled,
-      vibrationPattern: vibrationEnabled
-          ? Int64List.fromList([0, 1000, 500, 1000, 500, 1000])
-          : null,
-      enableLights: true,
-      showBadge: true,
-      sound: useCustomSound
-          ? const RawResourceAndroidNotificationSound('alarm')
-          : null,
-    );
-
-    await _notifications
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
-        ?.createNotificationChannel(androidChannel);
-
-    return channelId;
-  }
-
-  /// Solicita permisos necesarios para notificaciones invasivas
-  Future<void> _requestPermissions() async {
-    // Permiso de notificaciones (Android 13+)
-    final notificationStatus = await Permission.notification.request();
-    debugPrint('Permiso notificaciones: ${notificationStatus.isGranted}');
-
-    // Permiso para alarmas exactas (Android 12+)
-    final alarmStatus = await Permission.scheduleExactAlarm.request();
-    debugPrint('Permiso alarmas exactas: ${alarmStatus.isGranted}');
-  }
-
-  /// Maneja el tap en la notificacion
-  void _onNotificationTap(NotificationResponse response) {
-    debugPrint('Notificacion tocada: ${response.payload}');
-    if (response.actionId == 'stop_alarm') {
-      stopAlarmSound();
+    final androidPlugin = _androidPlugin();
+    if (androidPlugin == null) {
       return;
     }
-    stopAlarmSound();
+
+    const channel = AndroidNotificationChannel(
+      _androidChannelId,
+      _androidChannelName,
+      description: _androidChannelDescription,
+      importance: Importance.max,
+      playSound: true,
+      enableVibration: true,
+      showBadge: true,
+    );
+
+    await androidPlugin.createNotificationChannel(channel);
+  }
+
+  Future<void> _requestPermissions() async {
+    final androidPlugin = _androidPlugin();
+    if (androidPlugin != null) {
+      final notificationsGranted =
+          await androidPlugin.requestNotificationsPermission();
+      final exactAlarmGranted =
+          await androidPlugin.requestExactAlarmsPermission();
+      if (kDebugMode) {
+        debugPrint(
+          'Permisos Android -> notificaciones: '
+          '${notificationsGranted ?? false}, exactas: '
+          '${exactAlarmGranted ?? false}',
+        );
+      }
+    }
+
+    final iosPlugin = _iosPlugin();
+    if (iosPlugin != null) {
+      final granted = await iosPlugin.requestPermissions(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+      if (kDebugMode) {
+        debugPrint('Permisos iOS -> notificaciones: ${granted ?? false}');
+      }
+    }
+  }
+
+  void _onNotificationTap(NotificationResponse response) {
     if (_onTapHandler != null) {
       _onTapHandler!(
         ReminderNotificationResponse(
@@ -143,49 +182,116 @@ class NotificationHelper {
     _onTapHandler = handler;
   }
 
-  Future<void> startAlarmSound() async {
-    try {
-      await _alarmChannel.invokeMethod('startAlarm');
-    } on PlatformException catch (e) {
-      debugPrint('Error al iniciar sonido de alarma: $e');
+  static bool shouldScheduleReminder(
+    Reminder reminder, {
+    DateTime? now,
+  }) {
+    final currentTime = now ?? DateTime.now();
+    return reminder.notificationEnabled &&
+        !reminder.isCompleted &&
+        reminder.dateTime.isAfter(currentTime);
+  }
+
+  Future<void> scheduleReminderNotification(Reminder reminder) async {
+    final notificationId = generateNotificationId(reminder.id);
+    if (!shouldScheduleReminder(reminder)) {
+      await cancelNotification(notificationId);
+      return;
+    }
+
+    await cancelNotification(notificationId);
+    await scheduleNotification(
+      id: notificationId,
+      title: reminder.title,
+      body: _buildReminderBody(reminder),
+      scheduledDate: reminder.dateTime,
+      payload: reminder.id,
+      useCustomSound: _usesProminentDelivery(reminder.soundPath),
+      customSoundPath: reminder.soundPath,
+      vibrationEnabled: reminder.vibrationEnabled,
+    );
+  }
+
+  Future<void> syncReminderNotifications(Iterable<Reminder> reminders) async {
+    if (!_initialized) {
+      await initialize();
+    }
+
+    final remindersToSchedule = reminders
+        .where((reminder) => shouldScheduleReminder(reminder))
+        .toList();
+    final desiredIds = remindersToSchedule
+        .map((reminder) => generateNotificationId(reminder.id))
+        .toSet();
+
+    final pendingNotifications = await getPendingNotifications();
+    for (final pendingNotification in pendingNotifications) {
+      if (!desiredIds.contains(pendingNotification.id)) {
+        await cancelNotification(pendingNotification.id);
+      }
+    }
+
+    for (final reminder in remindersToSchedule) {
+      await scheduleReminderNotification(reminder);
     }
   }
 
-  Future<void> stopAlarmSound() async {
-    try {
-      await _alarmChannel.invokeMethod('stopAlarm');
-    } on PlatformException catch (e) {
-      debugPrint('Error al detener sonido de alarma: $e');
+  String _buildReminderBody(Reminder reminder) {
+    final description = reminder.description?.trim();
+    if (description == null || description.isEmpty) {
+      return _defaultReminderBody;
     }
+    return description;
   }
 
-  Future<void> _scheduleAlarmSound({
-    required int id,
-    required DateTime scheduledDate,
-  }) async {
-    try {
-      await _alarmChannel.invokeMethod('scheduleAlarm', {
-        'id': id,
-        'timestamp': scheduledDate.millisecondsSinceEpoch,
-      });
-    } on PlatformException catch (e) {
-      debugPrint('Error al programar sonido de alarma: $e');
-    }
+  bool _usesProminentDelivery(String? soundPath) {
+    return soundPath != null && soundPath.trim().isNotEmpty;
   }
 
-  Future<void> _cancelAlarmSound(int id) async {
-    try {
-      await _alarmChannel.invokeMethod('cancelAlarm', {'id': id});
-    } on PlatformException catch (e) {
-      debugPrint('Error al cancelar sonido de alarma: $e');
-    }
+  DarwinNotificationDetails _buildDarwinDetails({
+    required bool useProminentDelivery,
+  }) {
+    return DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+      presentBanner: true,
+      presentList: true,
+      categoryIdentifier: _iosReminderCategoryId,
+      threadIdentifier: 'reminders',
+      interruptionLevel: useProminentDelivery
+          ? InterruptionLevel.timeSensitive
+          : InterruptionLevel.active,
+    );
   }
 
-  bool _isInvalidSoundException(Object error) {
-    return error is PlatformException && error.code == 'invalid_sound';
+  AndroidNotificationDetails _buildAndroidDetails({
+    required bool vibrationEnabled,
+  }) {
+    return AndroidNotificationDetails(
+      _androidChannelId,
+      _androidChannelName,
+      channelDescription: _androidChannelDescription,
+      importance: Importance.max,
+      priority: Priority.high,
+      playSound: true,
+      enableVibration: vibrationEnabled,
+      category: AndroidNotificationCategory.reminder,
+      actions: const <AndroidNotificationAction>[
+        AndroidNotificationAction(
+          'mark_done',
+          'Completar',
+          showsUserInterface: true,
+        ),
+        AndroidNotificationAction(
+          'snooze_10',
+          '+10 min',
+          showsUserInterface: true,
+        ),
+      ],
+    );
   }
 
-  /// Programa una notificacion para una fecha especifica
   Future<void> scheduleNotification({
     required int id,
     required String title,
@@ -197,179 +303,49 @@ class NotificationHelper {
     bool loopSound = false,
     bool vibrationEnabled = true,
   }) async {
-    if (!_initialized) await initialize();
+    if (!_initialized) {
+      await initialize();
+    }
+    if (!_hasPlatformImplementation) {
+      return;
+    }
     if (customSoundPath != null && customSoundPath.isNotEmpty) {
-      // Placeholder para soporte futuro de sonidos personalizados por ruta.
+      // El valor se conserva como preferencia de estilo, no como ruta nativa.
+    }
+    if (loopSound) {
+      // iOS no mantiene un loop local; la preferencia se resuelve en la entrega.
     }
 
-    // Verificar que la fecha sea futura
-    if (scheduledDate.isBefore(DateTime.now())) {
-      debugPrint('No se puede programar alarma en el pasado');
+    if (!scheduledDate.isAfter(DateTime.now())) {
+      if (kDebugMode) {
+        debugPrint('No se puede programar una notificacion en el pasado.');
+      }
       return;
     }
 
-    // Convertir a TZDateTime
     final tzScheduledDate = tz.TZDateTime.from(scheduledDate, tz.local);
-
-    final channelId = await _ensureAndroidChannel(
-      useCustomSound: useCustomSound,
-      vibrationEnabled: vibrationEnabled,
-    );
-    final channelName =
-        useCustomSound ? 'Alarmas (alarma)' : 'Alarmas (sistema)';
-    final channelDescription = vibrationEnabled
-        ? 'Notificaciones de alarma con vibracion'
-        : 'Notificaciones de alarma sin vibracion';
-
-    // Detalles de Android (configuracion invasiva)
-    AndroidNotificationDetails buildAndroidDetails({
-      required bool useCustomSound,
-      required String channelId,
-    }) {
-      return AndroidNotificationDetails(
-        channelId,
-        channelName,
-        channelDescription: channelDescription,
-
-        // Prioridad maxima
-        importance: Importance.max,
-        priority: Priority.max,
-
-        // Sonido y vibracion
-        playSound: true,
-        sound: useCustomSound
-            ? const RawResourceAndroidNotificationSound('alarm')
-            : null,
-        enableVibration: vibrationEnabled,
-        vibrationPattern: vibrationEnabled
-            ? Int64List.fromList([
-                0,
-                1000,
-                500,
-                1000,
-                500,
-                1000,
-                500,
-                1000,
-              ])
-            : null,
-
-        // Intentos de pantalla completa
-        fullScreenIntent: true,
-
-        // Comportamiento persistente
-        autoCancel: false,
-        ongoing: true,
-
-        // Visibilidad
-        visibility: NotificationVisibility.public,
-        category: AndroidNotificationCategory.alarm,
-
-        // Iconos y colores
-        color: const Color.fromARGB(255, 13, 33, 184),
-        colorized: true,
-        largeIcon: const DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
-
-        // Informacion temporal
-        showWhen: true,
-        when: scheduledDate.millisecondsSinceEpoch,
-
-        // Estilo de texto expandido
-        styleInformation: BigTextStyleInformation(
-          body,
-          contentTitle: title,
-          summaryText: 'Recordatorio',
-          htmlFormatBigText: true,
-          htmlFormatContentTitle: true,
-        ),
-
-        // Acciones rapidas
-        actions: <AndroidNotificationAction>[
-          const AndroidNotificationAction(
-            'stop_alarm',
-            'Detener',
-            showsUserInterface: false,
-          ),
-          const AndroidNotificationAction(
-            'mark_done',
-            'Completar',
-            showsUserInterface: true,
-          ),
-          const AndroidNotificationAction(
-            'snooze_10',
-            '+10 min',
-            showsUserInterface: true,
-          ),
-        ],
-      );
-    }
-
     final notificationDetails = NotificationDetails(
-      android: buildAndroidDetails(
-        useCustomSound: useCustomSound,
-        channelId: channelId,
+      android: _buildAndroidDetails(vibrationEnabled: vibrationEnabled),
+      iOS: _buildDarwinDetails(
+        useProminentDelivery: useCustomSound,
       ),
     );
 
-    try {
-      await _notifications.zonedSchedule(
-        id,
-        title,
-        body,
-        tzScheduledDate,
-        notificationDetails,
-        payload: payload,
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-      );
+    await _notifications.zonedSchedule(
+      id,
+      title,
+      body,
+      tzScheduledDate,
+      notificationDetails,
+      payload: payload,
+      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+    );
 
-      if (loopSound) {
-        await _scheduleAlarmSound(id: id, scheduledDate: scheduledDate);
-      }
+    if (kDebugMode) {
       debugPrint('Notificacion programada para: $scheduledDate (ID: $id)');
-    } on PlatformException catch (e) {
-      if (useCustomSound && _isInvalidSoundException(e)) {
-        debugPrint(
-          'Sonido no encontrado, reintentando sin sonido personalizado.',
-        );
-        final fallbackChannelId = await _ensureAndroidChannel(
-          useCustomSound: false,
-          vibrationEnabled: vibrationEnabled,
-        );
-        final fallbackDetails = NotificationDetails(
-          android: buildAndroidDetails(
-            useCustomSound: false,
-            channelId: fallbackChannelId,
-          ),
-        );
-        try {
-          await _notifications.zonedSchedule(
-            id,
-            title,
-            body,
-            tzScheduledDate,
-            fallbackDetails,
-            payload: payload,
-            androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-          );
-
-          if (loopSound) {
-            await _scheduleAlarmSound(id: id, scheduledDate: scheduledDate);
-          }
-          debugPrint(
-            'Notificacion programada sin sonido personalizado (ID: $id)',
-          );
-        } catch (e) {
-          debugPrint('Error al programar notificacion: $e');
-        }
-        return;
-      }
-      debugPrint('Error al programar notificacion: $e');
-    } catch (e) {
-      debugPrint('Error al programar notificacion: $e');
     }
   }
 
-  /// Muestra una notificacion inmediata INVASIVA (para testing)
   Future<void> showImmediateNotification({
     required int id,
     required String title,
@@ -379,146 +355,91 @@ class NotificationHelper {
     bool useCustomSound = true,
     bool vibrationEnabled = true,
   }) async {
-    if (!_initialized) await initialize();
-
-    if (loopSound) {
-      await startAlarmSound();
+    if (!_initialized) {
+      await initialize();
     }
-
-    final channelId = await _ensureAndroidChannel(
-      useCustomSound: useCustomSound,
-      vibrationEnabled: vibrationEnabled,
-    );
-    final channelName =
-        useCustomSound ? 'Alarmas (alarma)' : 'Alarmas (sistema)';
-    final channelDescription = vibrationEnabled
-        ? 'Notificaciones de alarma con vibracion'
-        : 'Notificaciones de alarma sin vibracion';
-
-    AndroidNotificationDetails buildAndroidDetails({
-      required bool useCustomSound,
-      required String channelId,
-    }) {
-      return AndroidNotificationDetails(
-        channelId,
-        channelName,
-        channelDescription: channelDescription,
-        importance: Importance.max,
-        priority: Priority.max,
-        playSound: true,
-        sound: useCustomSound
-            ? const RawResourceAndroidNotificationSound('alarm')
-            : null,
-        enableVibration: vibrationEnabled,
-        vibrationPattern: vibrationEnabled
-            ? Int64List.fromList([0, 1000, 500, 1000, 500, 1000])
-            : null,
-        fullScreenIntent: true,
-        autoCancel: false,
-        ongoing: true,
-        visibility: NotificationVisibility.public,
-        category: AndroidNotificationCategory.alarm,
-        color: const Color(0xFFFF0000),
-        colorized: true,
-        styleInformation: BigTextStyleInformation(
-          body,
-          contentTitle: title,
-          summaryText: 'Notificacion de prueba',
-        ),
-        actions: <AndroidNotificationAction>[
-          const AndroidNotificationAction(
-            'stop_alarm',
-            'Detener',
-            showsUserInterface: false,
-          ),
-        ],
-      );
+    if (!_hasPlatformImplementation) {
+      return;
+    }
+    if (loopSound) {
+      // iOS no usa un servicio nativo extra para mantener audio en loop.
     }
 
     final notificationDetails = NotificationDetails(
-      android: buildAndroidDetails(
-        useCustomSound: useCustomSound,
-        channelId: channelId,
+      android: _buildAndroidDetails(vibrationEnabled: vibrationEnabled),
+      iOS: _buildDarwinDetails(
+        useProminentDelivery: useCustomSound,
       ),
     );
 
-    try {
-      await _notifications.show(
-        id,
-        title,
-        body,
-        notificationDetails,
-        payload: payload,
-      );
+    await _notifications.show(
+      id,
+      title,
+      body,
+      notificationDetails,
+      payload: payload,
+    );
+
+    if (kDebugMode) {
       debugPrint('Notificacion inmediata mostrada (ID: $id)');
-    } on PlatformException catch (e) {
-      if (useCustomSound && _isInvalidSoundException(e)) {
-        debugPrint(
-          'Sonido no encontrado, reintentando sin sonido personalizado.',
-        );
-        final fallbackChannelId = await _ensureAndroidChannel(
-          useCustomSound: false,
-          vibrationEnabled: vibrationEnabled,
-        );
-        final fallbackDetails = NotificationDetails(
-          android: buildAndroidDetails(
-            useCustomSound: false,
-            channelId: fallbackChannelId,
-          ),
-        );
-        try {
-          await _notifications.show(
-            id,
-            title,
-            body,
-            fallbackDetails,
-            payload: payload,
-          );
-          debugPrint(
-            'Notificacion inmediata mostrada sin sonido personalizado (ID: $id)',
-          );
-        } catch (e) {
-          debugPrint('Error al mostrar notificacion: $e');
-        }
-        return;
-      }
-      debugPrint('Error al mostrar notificacion: $e');
-    } catch (e) {
-      debugPrint('Error al mostrar notificacion: $e');
     }
   }
 
-  /// Cancela una notificacion especifica
   Future<void> cancelNotification(int id) async {
+    if (!_initialized) {
+      await initialize();
+    }
+    if (!_hasPlatformImplementation) {
+      return;
+    }
     await _notifications.cancel(id);
-    await _cancelAlarmSound(id);
-    debugPrint('Notificacion $id ha sido cancelada');
+    if (kDebugMode) {
+      debugPrint('Notificacion $id cancelada');
+    }
   }
 
-  /// Cancela todas las notificaciones
   Future<void> cancelAllNotifications() async {
-    final pending = await _notifications.pendingNotificationRequests();
-    for (final notification in pending) {
-      await _cancelAlarmSound(notification.id);
+    if (!_initialized) {
+      await initialize();
+    }
+    if (!_hasPlatformImplementation) {
+      return;
     }
     await _notifications.cancelAll();
-    await stopAlarmSound();
-    debugPrint('Todas las notificaciones canceladas');
+    if (kDebugMode) {
+      debugPrint('Todas las notificaciones canceladas');
+    }
   }
 
-  /// Obtiene notificaciones pendientes
   Future<List<PendingNotificationRequest>> getPendingNotifications() async {
-    return await _notifications.pendingNotificationRequests();
+    if (!_initialized) {
+      await initialize();
+    }
+    if (!_hasPlatformImplementation) {
+      return const <PendingNotificationRequest>[];
+    }
+    return _notifications.pendingNotificationRequests();
   }
 
-  /// Verifica si tiene permisos
   Future<bool> hasPermissions() async {
-    final notification = await Permission.notification.isGranted;
-    final exactAlarm = await Permission.scheduleExactAlarm.isGranted;
-    return notification && exactAlarm;
+    final androidPlugin = _androidPlugin();
+    if (androidPlugin != null) {
+      final notificationsEnabled =
+          await androidPlugin.areNotificationsEnabled() ?? false;
+      final canScheduleExact =
+          await androidPlugin.canScheduleExactNotifications() ?? false;
+      return notificationsEnabled && canScheduleExact;
+    }
+
+    final iosPlugin = _iosPlugin();
+    if (iosPlugin != null) {
+      final permissions = await iosPlugin.checkPermissions();
+      return permissions?.isEnabled ?? false;
+    }
+
+    return false;
   }
 
-  /// Genera un ID unico para la notificacion
   static int generateNotificationId(String reminderId) {
     var hash = 0x811C9DC5;
     for (final codeUnit in reminderId.codeUnits) {

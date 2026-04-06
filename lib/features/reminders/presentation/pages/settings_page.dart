@@ -33,8 +33,8 @@ class SettingsPage extends ConsumerWidget {
             [
               _buildSettingTile(
                 icon: Icons.notifications_active,
-                title: 'Sonido',
-                subtitle: 'Seleccionar sonido de alarma',
+                title: 'Estilo del aviso',
+                subtitle: 'Prioridad y sonido de las notificaciones en iPhone',
                 trailing: Text(
                   settings.soundLabel,
                   style: const TextStyle(color: AppColors.textSecondary),
@@ -59,7 +59,8 @@ class SettingsPage extends ConsumerWidget {
                         .read(remindersNotifierProvider.notifier)
                         .applyNotificationDefaults(
                           vibrationEnabled: value,
-                          soundPath: settings.useAlarmSound ? 'alarm' : null,
+                          soundPath:
+                              settings.useAlarmSound ? 'prominent' : null,
                         );
                     _showSnackOnMessenger(
                       messenger,
@@ -106,15 +107,15 @@ class SettingsPage extends ConsumerWidget {
                   value: effectiveCloudEnabled,
                   onChanged: firebaseAvailable
                       ? (value) async {
-                    if (!_validateSyncChange(
-                      context,
-                      value,
-                      settings.isarEnabled,
-                    )) {
-                      return;
-                    }
-                    await settingsNotifier.setFirebaseEnabled(value);
-                  }
+                          if (!_validateSyncChange(
+                            context,
+                            value,
+                            settings.isarEnabled,
+                          )) {
+                            return;
+                          }
+                          await settingsNotifier.setFirebaseEnabled(value);
+                        }
                       : null,
                   activeThumbColor: AppColors.accent,
                 ),
@@ -160,7 +161,7 @@ class SettingsPage extends ConsumerWidget {
             children: [
               const SizedBox(height: 12),
               const Text(
-                'Sonido de alarma',
+                'Estilo de notificacion',
                 style: TextStyle(
                   color: AppColors.textPrimary,
                   fontSize: 16,
@@ -172,7 +173,7 @@ class SettingsPage extends ConsumerWidget {
                 leading: const Icon(Icons.notifications_active,
                     color: AppColors.textPrimary),
                 title: const Text(
-                  'Alarma',
+                  'Destacada',
                   style: TextStyle(color: AppColors.textPrimary),
                 ),
                 trailing: settings.useAlarmSound
@@ -184,7 +185,7 @@ class SettingsPage extends ConsumerWidget {
                       .read(remindersNotifierProvider.notifier)
                       .applyNotificationDefaults(
                         vibrationEnabled: settings.vibrationEnabled,
-                        soundPath: 'alarm',
+                        soundPath: 'prominent',
                       );
                   if (context.mounted) Navigator.of(context).pop();
                 },
@@ -193,7 +194,7 @@ class SettingsPage extends ConsumerWidget {
                 leading:
                     const Icon(Icons.volume_up, color: AppColors.textPrimary),
                 title: const Text(
-                  'Sistema',
+                  'Estandar',
                   style: TextStyle(color: AppColors.textPrimary),
                 ),
                 trailing: !settings.useAlarmSound

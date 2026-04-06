@@ -214,6 +214,33 @@ DateTime? _extractDate(
     }
   }
 
+  final monthDatePattern = RegExp(
+    r'\b(?:el\s+)?(\d{1,2})(?:\s+de)?\s+(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)(?:\s+de\s+(\d{2,4}))?\b',
+    caseSensitive: false,
+  );
+
+  for (final match in monthDatePattern.allMatches(text)) {
+    if (_overlaps(match.start, match.end, spans)) continue;
+    final day = int.tryParse(match.group(1) ?? '');
+    final month = _monthFromName(match.group(2));
+    var year = int.tryParse(match.group(3) ?? '');
+    if (day == null || month == null) continue;
+
+    if (year != null && year < 100) {
+      year += 2000;
+    }
+    year ??= reference.year;
+
+    final candidate = _buildValidDate(year, month, day);
+    if (candidate == null) continue;
+
+    spans.add(_TextSpan(match.start, match.end));
+    if (match.group(3) == null && candidate.isBefore(_dateOnly(reference))) {
+      return _buildValidDate(reference.year + 1, month, day);
+    }
+    return candidate;
+  }
+
   final numericDatePattern = RegExp(
     r'\b(?:el\s+)?(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b',
     caseSensitive: false,
@@ -242,7 +269,7 @@ DateTime? _extractDate(
   }
 
   final weekdayPattern = RegExp(
-    r'\b(?:(el|este|proximo)\s+)?(lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b',
+    r'\b(?:(el|este|proximo)\s+)?(lunes|martes|miercoles|jueves|viernes|sabado|domingo)(?:\s+que\s+viene)?\b',
     caseSensitive: false,
   );
 
@@ -253,8 +280,10 @@ DateTime? _extractDate(
 
     var daysAhead = (weekday - reference.weekday + 7) % 7;
     final modifier = match.group(1);
+    final asksForNext = modifier == 'proximo' ||
+        (match.group(0) ?? '').contains('que viene');
     if (daysAhead == 0) {
-      if (modifier == 'proximo') {
+      if (asksForNext) {
         daysAhead = 7;
       } else if (matchedTime != null) {
         final candidate = DateTime(
@@ -548,6 +577,34 @@ int? _weekdayFromName(String? value) {
     'domingo' => DateTime.sunday,
     _ => null,
   };
+}
+
+int? _monthFromName(String? value) {
+  return switch (value) {
+    'enero' => DateTime.january,
+    'febrero' => DateTime.february,
+    'marzo' => DateTime.march,
+    'abril' => DateTime.april,
+    'mayo' => DateTime.may,
+    'junio' => DateTime.june,
+    'julio' => DateTime.july,
+    'agosto' => DateTime.august,
+    'septiembre' || 'setiembre' => DateTime.september,
+    'octubre' => DateTime.october,
+    'noviembre' => DateTime.november,
+    'diciembre' => DateTime.december,
+    _ => null,
+  };
+}
+
+DateTime? _buildValidDate(int year, int month, int day) {
+  final candidate = DateTime(year, month, day);
+  if (candidate.year != year ||
+      candidate.month != month ||
+      candidate.day != day) {
+    return null;
+  }
+  return candidate;
 }
 
 DateTime _dateOnly(DateTime value) =>
