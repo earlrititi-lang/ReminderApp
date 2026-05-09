@@ -17,10 +17,6 @@
         android:label="Recordatorios"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
-        <meta-data
-            android:name="io.flutter.embedding.android.EnableImpeller"
-            android:value="false" />
-
         <receiver
             android:name=".AlarmSoundReceiver"
             android:exported="false" />

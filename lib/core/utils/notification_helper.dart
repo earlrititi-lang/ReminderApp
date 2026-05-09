@@ -111,7 +111,6 @@ class NotificationHelper {
       onDidReceiveNotificationResponse: _onNotificationTap,
     );
 
-    await _requestPermissions();
     await _createNotificationChannel();
 
     _initialized = true;
@@ -136,18 +135,22 @@ class NotificationHelper {
     await androidPlugin.createNotificationChannel(channel);
   }
 
-  Future<void> _requestPermissions() async {
+  Future<void> requestPermissions() async {
+    if (!_initialized) {
+      await initialize();
+    }
+
     final androidPlugin = _androidPlugin();
     if (androidPlugin != null) {
       final notificationsGranted =
           await androidPlugin.requestNotificationsPermission();
       final exactAlarmGranted =
-          await androidPlugin.requestExactAlarmsPermission();
+          await androidPlugin.canScheduleExactNotifications();
       if (kDebugMode) {
         debugPrint(
           'Permisos Android -> notificaciones: '
           '${notificationsGranted ?? false}, exactas: '
-          '${exactAlarmGranted ?? false}',
+          '$exactAlarmGranted',
         );
       }
     }

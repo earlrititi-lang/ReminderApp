@@ -19,14 +19,14 @@ import 'features/reminders/presentation/pages/home_page.dart';
 import 'features/reminders/presentation/providers/reminder_provider.dart';
 import 'firebase_options.dart';
 
-void main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Configurar orientación (solo portrait)
-  await SystemChrome.setPreferredOrientations([
+  unawaited(SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
-  ]);
+  ]));
 
   // Configurar barra de estado
   SystemChrome.setSystemUIOverlayStyle(
@@ -37,7 +37,6 @@ void main() async {
       systemNavigationBarIconBrightness: Brightness.light,
     ),
   );
-
   runApp(const AppBootstrap());
 }
 
@@ -96,6 +95,9 @@ class _AppBootstrapState extends State<AppBootstrap> {
       setState(() {
         _isar = isar;
         _container = container;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(NotificationHelper().requestPermissions());
       });
     } catch (e) {
       if (!mounted) return;
