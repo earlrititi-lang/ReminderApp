@@ -1,8 +1,10 @@
-import 'package:isar/isar.dart';
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
 import '../../../../core/error/exceptions.dart';
 import '../models/reminder_model.dart';
 
-/// Contrato del Data Source Local
 abstract class ReminderLocalDataSource {
   Future<List<ReminderModel>> getReminders();
   Future<ReminderModel> getReminderById(String id);
@@ -13,32 +15,16 @@ abstract class ReminderLocalDataSource {
   Stream<List<ReminderModel>> watchReminders();
 }
 
-/// Implementación con Isar
 class ReminderLocalDataSourceImpl implements ReminderLocalDataSource {
-  final Isar isar;
+  ReminderLocalDataSourceImpl({required this.file});
 
-  ReminderLocalDataSourceImpl({required this.isar});
+  final File file;
+  final _changes = StreamController<List<ReminderModel>>.broadcast();
+  List<ReminderModel>? _cache;
+  Future<void> _writeQueue = Future<void>.value();
 
   DateTime _lastModifiedAt(ReminderModel reminder) {
     return reminder.updatedAt ?? reminder.createdAt;
-  }
-
-  bool _shouldReplaceReminder(
-    ReminderModel existing,
-    ReminderModel candidate,
-  ) {
-    final existingStamp = _lastModifiedAt(existing);
-    final candidateStamp = _lastModifiedAt(candidate);
-
-    if (candidateStamp.isAfter(existingStamp)) {
-      return true;
-    }
-
-    if (candidateStamp.isBefore(existingStamp)) {
-      return false;
-    }
-
-    return candidate.isarId >= existing.isarId;
   }
 
   List<ReminderModel> _dedupeReminders(Iterable<ReminderModel> reminders) {
@@ -46,7 +32,8 @@ class ReminderLocalDataSourceImpl implements ReminderLocalDataSource {
 
     for (final reminder in reminders) {
       final existing = remindersById[reminder.id];
-      if (existing == null || _shouldReplaceReminder(existing, reminder)) {
+      if (existing == null ||
+          !_lastModifiedAt(existing).isAfter(_lastModifiedAt(reminder))) {
         remindersById[reminder.id] = reminder;
       }
     }
@@ -54,154 +41,127 @@ class ReminderLocalDataSourceImpl implements ReminderLocalDataSource {
     return remindersById.values.toList();
   }
 
-  Future<List<ReminderModel>> _normalizeStoredReminders(
-    List<ReminderModel> reminders,
-  ) async {
-    final uniqueReminders = _dedupeReminders(reminders);
-    if (uniqueReminders.length == reminders.length) {
-      return uniqueReminders;
-    }
-
-    await isar.writeTxn(() async {
-      await isar.reminderModels.clear();
-      await isar.reminderModels.putAll(uniqueReminders);
+  Future<T> _serializeWrite<T>(Future<T> Function() action) {
+    final completer = Completer<T>();
+    _writeQueue = _writeQueue.then((_) async {
+      try {
+        completer.complete(await action());
+      } catch (error, stackTrace) {
+        completer.completeError(error, stackTrace);
+      }
     });
-
-    return uniqueReminders;
+    return completer.future;
   }
 
-  Future<ReminderModel> _putReminderByExternalId(ReminderModel reminder) async {
-    await isar.writeTxn(() async {
-      final existingReminders = await isar.reminderModels
-          .filter()
-          .idEqualTo(reminder.id)
-          .findAll();
+  Future<List<ReminderModel>> _readReminders() async {
+    if (_cache != null) {
+      return List<ReminderModel>.from(_cache!);
+    }
 
-      if (existingReminders.isNotEmpty) {
-        final canonicalReminder = _dedupeReminders(existingReminders).single;
-        reminder.isarId = canonicalReminder.isarId;
+    try {
+      if (!await file.exists()) {
+        _cache = <ReminderModel>[];
+        return <ReminderModel>[];
       }
 
-      await isar.reminderModels.put(reminder);
-
-      final duplicates = await isar.reminderModels
-          .filter()
-          .idEqualTo(reminder.id)
-          .findAll();
-      final duplicateIds = duplicates
-          .where((item) => item.isarId != reminder.isarId)
-          .map((item) => item.isarId)
-          .toList();
-
-      if (duplicateIds.isNotEmpty) {
-        await isar.reminderModels.deleteAll(duplicateIds);
+      final raw = await file.readAsString();
+      if (raw.trim().isEmpty) {
+        _cache = <ReminderModel>[];
+        return <ReminderModel>[];
       }
-    });
 
-    return reminder;
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) {
+        throw const FormatException('El archivo local no contiene una lista.');
+      }
+
+      final reminders = _dedupeReminders(
+        decoded
+            .whereType<Map>()
+            .map((item) => ReminderModel.fromJson(
+                  item.cast<String, dynamic>(),
+                )),
+      );
+      _cache = reminders;
+      return List<ReminderModel>.from(reminders);
+    } catch (e) {
+      throw CacheException('Error al leer recordatorios locales: $e');
+    }
+  }
+
+  Future<void> _writeReminders(List<ReminderModel> reminders) async {
+    try {
+      final uniqueReminders = _dedupeReminders(reminders)
+        ..sort((a, b) => a.dateTime.compareTo(b.dateTime));
+      await file.parent.create(recursive: true);
+      const encoder = JsonEncoder.withIndent('  ');
+      await file.writeAsString(
+        encoder.convert(uniqueReminders.map((item) => item.toJson()).toList()),
+        flush: true,
+      );
+      _cache = uniqueReminders;
+      _changes.add(List<ReminderModel>.from(uniqueReminders));
+    } catch (e) {
+      throw CacheException('Error al guardar recordatorios locales: $e');
+    }
   }
 
   @override
   Future<List<ReminderModel>> getReminders() async {
-    try {
-      final reminders = await isar.reminderModels.where().findAll();
-      return _normalizeStoredReminders(reminders);
-    } catch (e) {
-      throw CacheException('Error al obtener recordatorios: $e');
-    }
+    return _readReminders();
   }
 
   @override
   Future<ReminderModel> getReminderById(String id) async {
-    try {
-      final reminders = await isar.reminderModels
-          .filter()
-          .idEqualTo(id)
-          .findAll();
-      
-      if (reminders.isEmpty) {
-        throw CacheException('Recordatorio no encontrado');
-      }
-
-      if (reminders.length > 1) {
-        await _normalizeStoredReminders(await isar.reminderModels.where().findAll());
-      }
-
-      return _dedupeReminders(reminders).single;
-    } on CacheException {
-      rethrow;
-    } catch (e) {
-      throw CacheException('Error al obtener recordatorio: $e');
+    final reminders = await _readReminders();
+    final matches = reminders.where((reminder) => reminder.id == id);
+    if (matches.isEmpty) {
+      throw CacheException('Recordatorio no encontrado');
     }
+    return matches.last;
   }
 
   @override
-  Future<ReminderModel> createReminder(ReminderModel reminder) async {
-    try {
-      return await _putReminderByExternalId(reminder);
-    } on CacheException {
-      rethrow;
-    } catch (e) {
-      throw CacheException('Error al crear recordatorio: $e');
-    }
+  Future<ReminderModel> createReminder(ReminderModel reminder) {
+    return _serializeWrite(() async {
+      final reminders = await _readReminders();
+      reminders
+        ..removeWhere((item) => item.id == reminder.id)
+        ..add(reminder);
+      await _writeReminders(reminders);
+      return reminder;
+    });
   }
 
   @override
-  Future<ReminderModel> updateReminder(ReminderModel reminder) async {
-    try {
-      return await _putReminderByExternalId(reminder);
-    } on CacheException {
-      rethrow;
-    } catch (e) {
-      throw CacheException('Error al actualizar recordatorio: $e');
-    }
+  Future<ReminderModel> updateReminder(ReminderModel reminder) {
+    return _serializeWrite(() async {
+      final reminders = await _readReminders();
+      reminders
+        ..removeWhere((item) => item.id == reminder.id)
+        ..add(reminder);
+      await _writeReminders(reminders);
+      return reminder;
+    });
   }
 
   @override
-  Future<void> deleteReminder(String id) async {
-    try {
-      await isar.writeTxn(() async {
-        final deleted = await isar.reminderModels
-            .filter()
-            .idEqualTo(id)
-            .deleteFirst();
-        
-        if (!deleted) {
-          // Si ya no existe localmente, tratamos el delete como idempotente.
-          return;
-        }
-      });
-    } on CacheException {
-      rethrow;
-    } catch (e) {
-      throw CacheException('Error al eliminar recordatorio: $e');
-    }
+  Future<void> deleteReminder(String id) {
+    return _serializeWrite(() async {
+      final reminders = await _readReminders();
+      reminders.removeWhere((reminder) => reminder.id == id);
+      await _writeReminders(reminders);
+    });
   }
 
   @override
-  Future<void> cacheReminders(List<ReminderModel> reminders) async {
-    try {
-      final uniqueReminders = _dedupeReminders(reminders);
-      await isar.writeTxn(() async {
-        await isar.reminderModels.clear();
-        await isar.reminderModels.putAll(uniqueReminders);
-      });
-    } on CacheException {
-      rethrow;
-    } catch (e) {
-      throw CacheException('Error al cachear recordatorios: $e');
-    }
+  Future<void> cacheReminders(List<ReminderModel> reminders) {
+    return _serializeWrite(() => _writeReminders(reminders));
   }
 
   @override
-  Stream<List<ReminderModel>> watchReminders() {
-    try {
-      return isar.reminderModels
-          .where()
-          .watch(fireImmediately: true)
-          .asyncMap(_normalizeStoredReminders);
-    } catch (e) {
-      throw CacheException('Error al observar recordatorios: $e');
-    }
+  Stream<List<ReminderModel>> watchReminders() async* {
+    yield await _readReminders();
+    yield* _changes.stream;
   }
 }

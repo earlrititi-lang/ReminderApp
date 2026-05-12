@@ -1,13 +1,7 @@
-import 'package:isar/isar.dart';
 import '../../domain/entities/reminder.dart';
 
-part 'reminder_model.g.dart';
-
-/// Modelo de datos para persistencia con Isar
-@collection
+/// Modelo de datos para persistencia local en JSON.
 class ReminderModel {
-  Id isarId = Isar.autoIncrement;
-  
   late String id;
   late String title;
   String? description;
@@ -51,7 +45,7 @@ class ReminderModel {
     );
   }
 
-  /// Convierte desde JSON (para Firebase)
+  /// Convierte desde JSON.
   factory ReminderModel.fromJson(Map<String, dynamic> json) {
     return ReminderModel(
       id: json['id'] as String,
@@ -70,7 +64,7 @@ class ReminderModel {
     );
   }
 
-  /// Convierte a JSON (para Firebase)
+  /// Convierte a JSON.
   Map<String, dynamic> toJson() {
     return {
       'id': id,

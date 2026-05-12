@@ -5,19 +5,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:isar/isar.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/date_symbol_data_local.dart';
-import 'core/utils/firebase_support.dart';
 import 'core/utils/notification_helper.dart';
 import 'core/theme/app_colors.dart';
-import 'features/reminders/data/models/reminder_model.dart';
 import 'features/reminders/domain/entities/reminder.dart';
 import 'features/reminders/presentation/pages/home_page.dart';
 import 'features/reminders/presentation/providers/reminder_provider.dart';
-import 'firebase_options.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -48,7 +42,6 @@ class AppBootstrap extends StatefulWidget {
 }
 
 class _AppBootstrapState extends State<AppBootstrap> {
-  Isar? _isar;
   ProviderContainer? _container;
   Object? _bootstrapError;
 
@@ -62,30 +55,19 @@ class _AppBootstrapState extends State<AppBootstrap> {
   void dispose() {
     NotificationHelper().setOnNotificationTap(null);
     _container?.dispose();
-    final isar = _isar;
-    if (isar != null && isar.isOpen) {
-      unawaited(isar.close());
-    }
     super.dispose();
   }
 
   Future<void> _bootstrap() async {
     try {
-      final firebaseReady = await _initializeFirebase();
-      if (firebaseReady) {
-        await _signInAnonymouslySafe();
-      }
       await _initializeNotifications();
       await initializeDateFormatting('es_ES');
 
       final dir = await getApplicationDocumentsDirectory();
-      final isar = await Isar.open(
-        [ReminderModelSchema],
-        directory: dir.path,
-      );
+      final localDataSource = buildJsonReminderLocalDataSource(dir);
       final container = ProviderContainer(
         overrides: [
-          isarProvider.overrideWithValue(isar),
+          localDataSourceProvider.overrideWithValue(localDataSource),
         ],
       );
       await _restorePendingNotifications(container);
@@ -93,7 +75,6 @@ class _AppBootstrapState extends State<AppBootstrap> {
 
       if (!mounted) return;
       setState(() {
-        _isar = isar;
         _container = container;
       });
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -104,29 +85,6 @@ class _AppBootstrapState extends State<AppBootstrap> {
       setState(() {
         _bootstrapError = e;
       });
-    }
-  }
-
-  Future<bool> _initializeFirebase() async {
-    if (!isFirebaseConfiguredForCurrentPlatform()) {
-      if (kDebugMode) {
-        debugPrint('Firebase no configurado para esta plataforma.');
-      }
-      return false;
-    }
-
-    try {
-      if (Firebase.apps.isEmpty) {
-        await Firebase.initializeApp(
-          options: DefaultFirebaseOptions.currentPlatform,
-        );
-      }
-      return true;
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint('Firebase no disponible: $e');
-      }
-      return Firebase.apps.isNotEmpty;
     }
   }
 
@@ -146,22 +104,6 @@ class _AppBootstrapState extends State<AppBootstrap> {
     } catch (e) {
       if (kDebugMode) {
         debugPrint('No se pudieron reprogramar recordatorios locales: $e');
-      }
-    }
-  }
-
-  Future<void> _signInAnonymouslySafe() async {
-    if (Firebase.apps.isEmpty) {
-      return;
-    }
-
-    final auth = FirebaseAuth.instance;
-    if (auth.currentUser != null) return;
-    try {
-      await auth.signInAnonymously().timeout(const Duration(seconds: 8));
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint('Auth anónima falló o no disponible: $e');
       }
     }
   }
@@ -246,7 +188,7 @@ class _AppBootstrapState extends State<AppBootstrap> {
       );
     }
 
-    if (_isar == null || _container == null) {
+    if (_container == null) {
       return const MyApp(
         home: _SplashScreen(),
       );

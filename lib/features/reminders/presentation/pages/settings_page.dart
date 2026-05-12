@@ -10,9 +10,7 @@ class SettingsPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final settings = ref.watch(appSettingsProvider);
-    final firebaseAvailable = ref.watch(firebaseAvailableProvider);
     final settingsNotifier = ref.read(appSettingsProvider.notifier);
-    final effectiveCloudEnabled = firebaseAvailable && settings.firebaseEnabled;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -74,72 +72,9 @@ class SettingsPage extends ConsumerWidget {
               ),
             ],
           ),
-          const SizedBox(height: 24),
-          _buildSection(
-            'Sincronizaci\u00f3n',
-            [
-              _buildSettingTile(
-                icon: Icons.storage,
-                title: 'Isar (local)',
-                subtitle: 'Guardar recordatorios en el dispositivo',
-                trailing: Switch(
-                  value: settings.isarEnabled,
-                  onChanged: (value) async {
-                    if (!_validateSyncChange(
-                      context,
-                      value,
-                      effectiveCloudEnabled,
-                    )) {
-                      return;
-                    }
-                    await settingsNotifier.setIsarEnabled(value);
-                  },
-                  activeThumbColor: AppColors.accent,
-                ),
-              ),
-              _buildSettingTile(
-                icon: Icons.cloud_sync,
-                title: 'Firebase (nube)',
-                subtitle: firebaseAvailable
-                    ? 'Sincronizar con la nube'
-                    : 'No configurado en esta plataforma',
-                trailing: Switch(
-                  value: effectiveCloudEnabled,
-                  onChanged: firebaseAvailable
-                      ? (value) async {
-                          if (!_validateSyncChange(
-                            context,
-                            value,
-                            settings.isarEnabled,
-                          )) {
-                            return;
-                          }
-                          await settingsNotifier.setFirebaseEnabled(value);
-                        }
-                      : null,
-                  activeThumbColor: AppColors.accent,
-                ),
-              ),
-            ],
-          ),
         ],
       ),
     );
-  }
-
-  bool _validateSyncChange(
-    BuildContext context,
-    bool newValue,
-    bool otherEnabled,
-  ) {
-    if (!newValue && !otherEnabled) {
-      _showSnack(
-        context,
-        'Debes mantener al menos una fuente activa',
-      );
-      return false;
-    }
-    return true;
   }
 
   Future<void> _showSoundPicker(
@@ -278,10 +213,6 @@ class SettingsPage extends ConsumerWidget {
           const Icon(Icons.chevron_right, color: AppColors.textMuted),
       onTap: onTap,
     );
-  }
-
-  void _showSnack(BuildContext context, String message) {
-    _showSnackOnMessenger(ScaffoldMessenger.of(context), message);
   }
 
   void _showSnackOnMessenger(

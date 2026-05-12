@@ -82,7 +82,6 @@ RemindersNotifier _buildNotifier(_FakeReminderRepository repository) {
     updateReminder: UpdateReminder(repository, notificationHelper),
     deleteReminder: DeleteReminder(repository, notificationHelper),
     uuid: const Uuid(),
-    isLocalEnabled: true,
   );
 }
 

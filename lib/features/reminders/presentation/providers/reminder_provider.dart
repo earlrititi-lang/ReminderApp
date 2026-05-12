@@ -1,19 +1,14 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:dartz/dartz.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:isar/isar.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:uuid/uuid.dart';
 import '../../../../core/error/failures.dart';
-import '../../../../core/settings/app_settings_provider.dart';
 import '../../../../core/usecases/usecase.dart';
-import '../../../../core/utils/firebase_support.dart';
 import '../../../../core/utils/notification_helper.dart';
 import '../../data/datasources/reminder_local_datasource.dart';
-import '../../data/datasources/reminder_remote_datasource.dart';
 import '../../data/repositories/reminder_repository_impl.dart';
 import '../../domain/entities/reminder.dart';
 import '../../domain/repositories/reminder_repository.dart';
@@ -22,65 +17,26 @@ import '../../domain/usecases/delete_reminder.dart';
 import '../../domain/usecases/get_reminders.dart';
 import '../../domain/usecases/update_reminder.dart';
 
-final isarProvider = Provider<Isar>((ref) {
-  throw UnimplementedError('Isar debe ser inicializado en main.dart');
-});
-
-final firebaseAvailableProvider = Provider<bool>((ref) {
-  return isFirebaseAvailable();
-});
-
-final firebaseAuthProvider = Provider<FirebaseAuth?>((ref) {
-  if (!ref.watch(firebaseAvailableProvider)) {
-    return null;
-  }
-  return FirebaseAuth.instance;
-});
-
-final firestoreProvider = Provider<FirebaseFirestore?>((ref) {
-  if (!ref.watch(firebaseAvailableProvider)) {
-    return null;
-  }
-  return FirebaseFirestore.instance;
-});
-
 final uuidProvider = Provider<Uuid>((ref) {
   return const Uuid();
 });
 
 final localDataSourceProvider = Provider<ReminderLocalDataSource>((ref) {
-  final isar = ref.watch(isarProvider);
-  return ReminderLocalDataSourceImpl(isar: isar);
-});
-
-final remoteDataSourceProvider = Provider<ReminderRemoteDataSource>((ref) {
-  if (!ref.watch(firebaseAvailableProvider)) {
-    return const UnavailableReminderRemoteDataSource();
-  }
-
-  final firestore = ref.watch(firestoreProvider);
-  final auth = ref.watch(firebaseAuthProvider);
-  return ReminderRemoteDataSourceImpl(
-    firestore: firestore!,
-    auth: auth!,
-  );
+  throw UnimplementedError('El almacenamiento local debe inicializarse en main.dart');
 });
 
 final reminderRepositoryProvider = Provider<ReminderRepository>((ref) {
   final localDataSource = ref.watch(localDataSourceProvider);
-  final remoteDataSource = ref.watch(remoteDataSourceProvider);
-  final syncSettings = ref.watch(
-    appSettingsProvider.select(
-      (settings) => (settings.isarEnabled, settings.firebaseEnabled),
-    ),
-  );
   return ReminderRepositoryImpl(
     localDataSource: localDataSource,
-    remoteDataSource: remoteDataSource,
-    isLocalEnabled: syncSettings.$1,
-    isCloudEnabled: syncSettings.$2 && ref.watch(firebaseAvailableProvider),
   );
 });
+
+ReminderLocalDataSource buildJsonReminderLocalDataSource(Directory directory) {
+  return ReminderLocalDataSourceImpl(
+    file: File('${directory.path}${Platform.pathSeparator}reminders.json'),
+  );
+}
 
 final notificationHelperProvider = Provider<NotificationHelper>((ref) {
   return NotificationHelper();
@@ -145,7 +101,6 @@ class RemindersNotifier extends StateNotifier<RemindersState> {
   final UpdateReminder updateReminder;
   final DeleteReminder deleteReminder;
   final Uuid uuid;
-  final bool isLocalEnabled;
 
   StreamSubscription<Either<Failure, List<Reminder>>>? _remindersSubscription;
 
@@ -158,7 +113,6 @@ class RemindersNotifier extends StateNotifier<RemindersState> {
     required this.updateReminder,
     required this.deleteReminder,
     required this.uuid,
-    required this.isLocalEnabled,
   }) : super(const RemindersState()) {
     unawaited(_initialize());
   }
@@ -170,9 +124,6 @@ class RemindersNotifier extends StateNotifier<RemindersState> {
 
   Future<void> _bindReminderStream() async {
     await _remindersSubscription?.cancel();
-    if (!isLocalEnabled) {
-      return;
-    }
 
     _remindersSubscription = repository.watchReminders().listen(
       (result) {
@@ -440,9 +391,6 @@ final remindersNotifierProvider =
     updateReminder: ref.watch(updateReminderUseCaseProvider),
     deleteReminder: ref.watch(deleteReminderUseCaseProvider),
     uuid: ref.watch(uuidProvider),
-    isLocalEnabled: ref.watch(
-      appSettingsProvider.select((settings) => settings.isarEnabled),
-    ),
   );
 });
 
