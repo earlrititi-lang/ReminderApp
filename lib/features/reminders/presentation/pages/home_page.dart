@@ -119,6 +119,7 @@ class _HomePageState extends ConsumerState<HomePage> {
   Future<void> _showAddReminderDialog() async {
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
+      requestFocus: false,
       builder: (context) => const AddReminderDialog(),
     );
 
