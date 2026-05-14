@@ -70,7 +70,6 @@ class _AppBootstrapState extends State<AppBootstrap> {
           localDataSourceProvider.overrideWithValue(localDataSource),
         ],
       );
-      await _restorePendingNotifications(container);
       _configureNotificationHandling(container);
 
       if (!mounted) return;
@@ -78,7 +77,7 @@ class _AppBootstrapState extends State<AppBootstrap> {
         _container = container;
       });
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        unawaited(NotificationHelper().requestPermissions());
+        unawaited(_requestPermissionsAndRestoreNotifications(container));
       });
     } catch (e) {
       if (!mounted) return;
@@ -106,6 +105,13 @@ class _AppBootstrapState extends State<AppBootstrap> {
         debugPrint('No se pudieron reprogramar recordatorios locales: $e');
       }
     }
+  }
+
+  Future<void> _requestPermissionsAndRestoreNotifications(
+    ProviderContainer container,
+  ) async {
+    await NotificationHelper().requestPermissions();
+    await _restorePendingNotifications(container);
   }
 
   void _configureNotificationHandling(ProviderContainer container) {

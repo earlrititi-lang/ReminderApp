@@ -251,20 +251,17 @@ class NotificationHelper {
     return soundPath != null && soundPath.trim().isNotEmpty;
   }
 
-  DarwinNotificationDetails _buildDarwinDetails({
-    required bool useProminentDelivery,
-  }) {
+  DarwinNotificationDetails _buildDarwinDetails() {
     return DarwinNotificationDetails(
       presentAlert: true,
       presentBadge: true,
       presentSound: true,
       presentBanner: true,
       presentList: true,
+      sound: '',
       categoryIdentifier: _iosReminderCategoryId,
       threadIdentifier: 'reminders',
-      interruptionLevel: useProminentDelivery
-          ? InterruptionLevel.timeSensitive
-          : InterruptionLevel.active,
+      interruptionLevel: InterruptionLevel.timeSensitive,
     );
   }
 
@@ -312,6 +309,7 @@ class NotificationHelper {
     if (!_hasPlatformImplementation) {
       return;
     }
+    await requestPermissions();
     if (customSoundPath != null && customSoundPath.isNotEmpty) {
       // El valor se conserva como preferencia de estilo, no como ruta nativa.
     }
@@ -329,9 +327,7 @@ class NotificationHelper {
     final tzScheduledDate = tz.TZDateTime.from(scheduledDate, tz.local);
     final notificationDetails = NotificationDetails(
       android: _buildAndroidDetails(vibrationEnabled: vibrationEnabled),
-      iOS: _buildDarwinDetails(
-        useProminentDelivery: useCustomSound,
-      ),
+      iOS: _buildDarwinDetails(),
     );
 
     await _notifications.zonedSchedule(
@@ -364,15 +360,14 @@ class NotificationHelper {
     if (!_hasPlatformImplementation) {
       return;
     }
+    await requestPermissions();
     if (loopSound) {
       // iOS no usa un servicio nativo extra para mantener audio en loop.
     }
 
     final notificationDetails = NotificationDetails(
       android: _buildAndroidDetails(vibrationEnabled: vibrationEnabled),
-      iOS: _buildDarwinDetails(
-        useProminentDelivery: useCustomSound,
-      ),
+      iOS: _buildDarwinDetails(),
     );
 
     await _notifications.show(
